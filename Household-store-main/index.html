@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Каталог магазина</title>
+    <script src="telegram-web-app.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        body { background-color: #ffffff; color: #000000; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; padding: 16px; box-sizing: border-box; user-select: none; -webkit-user-select: none; }
+        @media (prefers-color-scheme: dark) { body { background-color: #121212; color: #ffffff; } }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+        .title { font-size: 22px; font-weight: bold; margin: 0; color: #7c3aed; }
+
+        .brands-container { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 8px; margin-bottom: 8px; white-space: nowrap; -webkit-overflow-scrolling: touch; }
+        .brands-container::-webkit-scrollbar { display: none; }
+        .brand-btn { padding: 10px 18px; border-radius: 12px; border: 1px solid rgba(0,0,0,0.1); background-color: #f4f4f5; color: #000000; font-size: 14px; font-weight: 700; cursor: pointer; }
+        @media (prefers-color-scheme: dark) { .brand-btn { background-color: #1e1e1e; color: #ffffff; border-color: rgba(255,255,255,0.1); } }
+        .brand-btn.active { background-color: #a855f7; color: white; border-color: #a855f7; }
+
+        .flavors-container { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 12px; margin-bottom: 16px; white-space: nowrap; -webkit-overflow-scrolling: touch; opacity: 0; max-height: 0; overflow-y: hidden; }
+        .flavors-container.show { opacity: 1; max-height: 50px; }
+        .flavor-btn { padding: 6px 14px; border-radius: 20px; border: 1px solid rgba(168, 85, 247, 0.3); background-color: transparent; color: #a855f7; font-size: 12px; font-weight: 600; cursor: pointer; }
+        @media (prefers-color-scheme: dark) { .flavor-btn { color: #c084fc; border-color: rgba(192, 132, 252, 0.3); } }
+        .flavor-btn.active { background-color: #6366f1; color: white; border-color: #6366f1; }
+
+        .catalog-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 30px; }
+        .card { background-color: #f4f4f5; padding: 12px; border-radius: 16px; display: flex; flex-direction: column; justify-content: space-between; border: 1px solid rgba(0,0,0,0.05); min-height: 220px; }
+        @media (prefers-color-scheme: dark) { .card { background-color: #1e1e1e; } }
+        .card-icon { width: 100%; height: 75px; background-color: rgba(168, 85, 247, 0.1); border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 32px; margin-bottom: 8px; }
+        .card-image { width: 100%; height: 95px; border-radius: 12px; object-fit: cover; margin-bottom: 8px; }
+        .card-title { font-size: 13px; font-weight: 600; margin: 0 0 6px 0; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+        .price { color: #a855f7; font-weight: 700; font-size: 15px; margin-bottom: 6px; display: block; }
+        .muted { color: #8e8e93; text-align: center; padding: 20px 0; grid-column: span 2; }
+
+        .quantity-counter { display: flex; align-items: center; justify-content: space-between; background-color: rgba(0,0,0,0.05); border-radius: 10px; padding: 2px; box-sizing: border-box; width: 100%; margin-top: auto; }
+        @media (prefers-color-scheme: dark) { .quantity-counter { background-color: rgba(255,255,255,0.08); } }
+        .count-btn { background-color: #a855f7; color: white; border: none; width: 28px; height: 28px; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+        .count-input { border: none; background: transparent; width: 42px; text-align: center; font-size: 14px; font-weight: 600; color: inherit; outline: none; }
+
+        .cart-section { border-top: 2px solid #a855f7; padding-top: 20px; margin-top: 20px; }
+        .cart-item { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid rgba(0,0,0,0.1); font-size: 13px; }
+        .checkout-btn { width: 100%; background-color: #34c759; color: white; border: none; padding: 14px; border-radius: 14px; font-weight: 700; font-size: 16px; text-align: center; cursor: pointer; display: block; margin-top: 15px; box-sizing: border-box; }
+        .notice { text-align: center; background-color: rgba(168, 85, 247, 0.1); border-radius: 16px; padding: 20px; }
+    </style>
+</head>
+<body>
+    <div class="header"><h1 class="title">Каталог</h1></div>
+    <div class="brands-container" id="brands-menu"></div>
+    <div class="flavors-container" id="flavors-menu"></div>
+    <div class="catalog-grid" id="catalog"></div>
+    <div id="cart-container"></div>
+
+    <script>
+        var tg = window.Telegram && window.Telegram.WebApp;
+        if (tg) {
+            try { tg.ready(); tg.expand(); } catch (e) {}
+        }
+
+        const ALL_FLAVORS = "Все вкусы";
+        const MAX_QTY = 99;
+        let cart = {};
+        let currentBrand = "";
+        let currentFlavor = ALL_FLAVORS;
+        let products = [];
+        let brands = [];
+        let flavorsByBrand = {};
+
+        const SUPABASE_URL = "https://bynetwdwpflflzbnofii.supabase.co";
+        const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ5bmV0d2R3cGZsZmx6Ym5vZmlpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI4ODU4ODksImV4cCI6MjEwODQ2MTg4OX0.kaEIa_xHGIZAfD9djYwtif8WDrnb6BPoaVhrKj2p_2E";
+        const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+        function productCategory(product) {
+            const value = (product.category || "").toString().trim();
+            return value || "Без категории";
+        }
+
+        function productFlavor(product) {
+            return (product.flavor || "").toString().trim();
+        }
+
+        function rebuildFilters() {
+            const brandSet = [];
+            flavorsByBrand = {};
+            products.forEach(function (product) {
+                const brand = productCategory(product);
+                if (brandSet.indexOf(brand) === -1) {
+                    brandSet.push(brand);
+                }
+                if (!flavorsByBrand[brand]) {
+                    flavorsByBrand[brand] = [];
+                }
+                const flavor = productFlavor(product);
+                if (flavor && flavorsByBrand[brand].indexOf(flavor) === -1) {
+                    flavorsByBrand[brand].push(flavor);
+                }
+            });
+            brands = brandSet;
+            currentBrand = brands[0] || "";
+            currentFlavor = ALL_FLAVORS;
+        }
+
+        async function loadData() {
+            try {
+                const result = await db.from("products").select("*");
+                if (result.error) throw result.error;
+                products = result.data || [];
+            } catch (e) {
+                console.error("Ошибка загрузки базы данных", e);
+                products = [];
+            }
+            rebuildFilters();
+            renderBrandsMenu();
+            renderFlavorsMenu();
+            renderCatalog();
+        }
+
+        function renderBrandsMenu() {
+            const container = document.getElementById("brands-menu");
+            container.replaceChildren();
+            brands.forEach(function (brand) {
+                const btn = document.createElement("button");
+                btn.className = "brand-btn" + (currentBrand === brand ? " active" : "");
+                btn.textContent = brand;
+                btn.addEventListener("click", function () {
+                    currentBrand = brand;
+                    currentFlavor = ALL_FLAVORS;
+                    renderBrandsMenu();
+                    renderFlavorsMenu();
+                    renderCatalog();
+                });
+                container.appendChild(btn);
+            });
+        }
+
+        function renderFlavorsMenu() {
+            const container = document.getElementById("flavors-menu");
+            container.replaceChildren();
+            const flavors = flavorsByBrand[currentBrand] || [];
+            if (!flavors.length) {
+                container.classList.remove("show");
+                return;
+            }
+            container.classList.add("show");
+            [ALL_FLAVORS].concat(flavors).forEach(function (flavor) {
+                const btn = document.createElement("button");
+                btn.className = "flavor-btn" + (currentFlavor === flavor ? " active" : "");
+                btn.textContent = flavor;
+                btn.addEventListener("click", function () {
+                    currentFlavor = flavor;
+                    renderFlavorsMenu();
+                    renderCatalog();
+                });
+                container.appendChild(btn);
+            });
+        }
+
+        function appendCardImage(card, product) {
+            if (!product.image) {
+                const fallback = document.createElement("div");
+                fallback.className = "card-icon";
+                card.appendChild(fallback);
+                return;
+            }
+            const img = document.createElement("img");
+            img.className = "card-image";
+            img.alt = product.name || "";
+            img.src = product.image;
+            img.addEventListener("error", function onError() {
+                img.removeEventListener("error", onError);
+                const fallback = document.createElement("div");
+                fallback.className = "card-icon";
+                img.replaceWith(fallback);
+            });
+            card.appendChild(img);
+        }
+
+        function renderCatalog() {
+            const grid = document.getElementById("catalog");
+            grid.replaceChildren();
+
+            let filtered = products.filter(function (product) {
+                return productCategory(product) === currentBrand;
+            });
+            if (currentFlavor !== ALL_FLAVORS) {
+                filtered = filtered.filter(function (product) {
+                    return productFlavor(product) === currentFlavor;
+                });
+            }
+
+            if (!products.length) {
+                const empty = document.createElement("p");
+                empty.className = "muted";
+                empty.textContent = "Не удалось загрузить товары. Проверьте подключение.";
+                grid.appendChild(empty);
+                return;
+            }
+
+            if (!filtered.length) {
+                const empty = document.createElement("p");
+                empty.className = "muted";
+                empty.textContent = "Товаров с таким вкусом сейчас нет";
+                grid.appendChild(empty);
+                return;
+            }
+
+            filtered.forEach(function (product) {
+                const card = document.createElement("div");
+                card.className = "card";
+                appendCardImage(card, product);
+
+                const title = document.createElement("h3");
+                title.className = "card-title";
+                title.textContent = product.name || "Без названия";
+                card.appendChild(title);
+
+                const footer = document.createElement("div");
+                footer.style.display = "flex";
+                footer.style.flexDirection = "column";
+                footer.style.marginTop = "auto";
+                footer.style.gap = "8px";
+
+                const price = document.createElement("span");
+                price.className = "price";
+                price.textContent = product.price + " ₽";
+                footer.appendChild(price);
+
+                const counter = document.createElement("div");
+                counter.className = "quantity-counter";
+
+                const minus = document.createElement("button");
+                minus.className = "count-btn";
+                minus.type = "button";
+                minus.textContent = "−";
+                minus.addEventListener("click", function () {
+                    updateQty(product.id, -1);
+                });
+
+                const input = document.createElement("input");
+                input.type = "number";
+                input.className = "count-input";
+                input.id = "input-" + product.id;
+                input.min = "0";
+                input.max = String(MAX_QTY);
+                input.value = String(cart[product.id] || 0);
+                input.addEventListener("change", function () {
+                    setQtyFromInput(product.id, input.value);
+                });
+
+                const plus = document.createElement("button");
+                plus.className = "count-btn";
+                plus.type = "button";
+                plus.textContent = "+";
+                plus.addEventListener("click", function () {
+                    updateQty(product.id, 1);
+                });
+
+                counter.appendChild(minus);
+                counter.appendChild(input);
+                counter.appendChild(plus);
+                footer.appendChild(counter);
+                card.appendChild(footer);
+                grid.appendChild(card);
+            });
+        }
+
+        function updateQty(id, delta) {
+            setQtyInCart(id, (cart[id] || 0) + delta);
+        }
+
+        function setQtyFromInput(id, value) {
+            setQtyInCart(id, parseInt(value, 10) || 0);
+        }
+
+        function setQtyInCart(id, val) {
+            if (val < 0) val = 0;
+            if (val > MAX_QTY) val = MAX_QTY;
+            if (val === 0) {
+                delete cart[id];
+            } else {
+                cart[id] = val;
+            }
+            const input = document.getElementById("input-" + id);
+            if (input) input.value = String(val);
+            renderCart();
+        }
+
+        function renderCart() {
+            const container = document.getElementById("cart-container");
+            container.replaceChildren();
+
+            let total = 0;
+            const section = document.createElement("div");
+            section.className = "cart-section";
+
+            const heading = document.createElement("h2");
+            heading.className = "title";
+            heading.style.fontSize = "18px";
+            heading.style.marginBottom = "15px";
+            heading.textContent = "Ваша корзина";
+            section.appendChild(heading);
+
+            let hasItems = false;
+            Object.keys(cart).forEach(function (id) {
+                const product = products.find(function (item) { return String(item.id) === String(id); });
+                if (!product || cart[id] <= 0) return;
+                hasItems = true;
+                const cost = product.price * cart[id];
+                total += cost;
+
+                const row = document.createElement("div");
+                row.className = "cart-item";
+
+                const left = document.createElement("div");
+                const name = document.createElement("strong");
+                name.textContent = product.name;
+                const meta = document.createElement("span");
+                meta.style.color = "#8e8e93";
+                meta.textContent = product.price + " ₽ x " + cart[id];
+                left.appendChild(name);
+                left.appendChild(document.createElement("br"));
+                left.appendChild(meta);
+
+                const right = document.createElement("span");
+                right.style.fontWeight = "700";
+                right.style.marginLeft = "auto";
+                right.style.color = "#a855f7";
+                right.textContent = cost + " ₽";
+
+                row.appendChild(left);
+                row.appendChild(right);
+                section.appendChild(row);
+            });
+
+            if (!hasItems) return;
+
+            const totalRow = document.createElement("div");
+            totalRow.style.display = "flex";
+            totalRow.style.justifyContent = "space-between";
+            totalRow.style.fontWeight = "bold";
+            totalRow.style.marginTop = "15px";
+            totalRow.style.fontSize = "16px";
+            const totalLabel = document.createElement("span");
+            totalLabel.textContent = "Итого:";
+            const totalValue = document.createElement("span");
+            totalValue.style.marginLeft = "auto";
+            totalValue.textContent = total + " ₽";
+            totalRow.appendChild(totalLabel);
+            totalRow.appendChild(totalValue);
+            section.appendChild(totalRow);
+
+            const checkout = document.createElement("button");
+            checkout.className = "checkout-btn";
+            checkout.type = "button";
+            checkout.textContent = "Оформить заказ";
+            checkout.addEventListener("click", sendOrder);
+            section.appendChild(checkout);
+
+            container.appendChild(section);
+        }
+
+        function showNotice(title, text) {
+            const container = document.getElementById("cart-container");
+            container.replaceChildren();
+            const box = document.createElement("div");
+            box.className = "cart-section notice";
+            const heading = document.createElement("h2");
+            heading.className = "title";
+            heading.style.fontSize = "20px";
+            heading.style.marginBottom = "10px";
+            heading.textContent = title;
+            const paragraph = document.createElement("p");
+            paragraph.className = "muted";
+            paragraph.style.padding = "0";
+            paragraph.textContent = text;
+            box.appendChild(heading);
+            box.appendChild(paragraph);
+            container.appendChild(box);
+        }
+
+        function sendOrder() {
+            const items = [];
+            Object.keys(cart).forEach(function (id) {
+                if (cart[id] > 0) {
+                    items.push({ id: isNaN(Number(id)) ? id : Number(id), qty: cart[id] });
+                }
+            });
+            if (!items.length) return;
+
+            if (!tg || typeof tg.sendData !== "function") {
+                showNotice("Откройте магазин в Telegram", "Заказ отправляется через Mini App, а не через браузер.");
+                return;
+            }
+
+            try {
+                tg.sendData(JSON.stringify({ items: items }));
+                cart = {};
+                renderCatalog();
+                showNotice("Заказ отправлен", "Окно закроется, подтверждение придёт в чат с ботом.");
+            } catch (e) {
+                showNotice("Не удалось отправить заказ", "Закройте Mini App и откройте каталог кнопкой в боте.");
+            }
+        }
+
+        loadData();
+    </script>
+</body>
+</html>
